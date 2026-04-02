@@ -63,6 +63,9 @@ st.markdown(
         border-radius: 8px !important;
         caret-color: #ffffff !important;
     }
+    section[data-testid="stSidebar"] [data-baseweb="select"] * {
+        color: #1b4332 !important;
+    }
     section[data-testid="stSidebar"] textarea::placeholder {
         color: #74c69d !important;
         opacity: 0.7 !important;
@@ -108,6 +111,24 @@ st.markdown(
         font-size: 0.85rem;
         color: #666;
         margin-bottom: 4px;
+    }
+    .city-tag-area {
+        min-height: 90px;
+        display: flex;
+        flex-wrap: wrap;
+        align-content: flex-start;
+        gap: 4px;
+        margin: 6px 0;
+    }
+    .city-tag {
+        display: inline-block;
+        background: #f0fdf4;
+        color: #1b4332;
+        padding: 4px 12px;
+        border-radius: 12px;
+        font-size: 0.8rem;
+        font-weight: 600;
+        white-space: nowrap;
     }
 
     /* ── Section headers ────────────────────────────── */
@@ -246,6 +267,7 @@ def _init_state():
         "days":          3,
         "cities":        [],
         "selected_city": None,
+        "selected_tags": [],
         "tips":          None,
         "error":         None,
     }
@@ -363,8 +385,9 @@ def _reset_to_stage1():
     st.session_state.tips          = None
     st.session_state.error         = None
 
-def _select_city(city_name: str):
+def _select_city(city_name: str, tags: list[str] | None = None):
     st.session_state.selected_city = city_name
+    st.session_state.selected_tags = tags or []
     st.session_state.tips          = None
     st.session_state.error         = None
     st.session_state.stage         = 2
@@ -401,9 +424,9 @@ with st.sidebar:
         if not user_request.strip():
             st.warning("Please describe your trip.")
         else:
-            st.session_state.user_request = user_request
-            st.session_state.days         = days
-            st.session_state.cities       = []
+            st.session_state.user_request  = user_request
+            st.session_state.days          = days
+            st.session_state.cities        = []
             st.session_state.selected_city = None
             st.session_state.tips          = None
             st.session_state.error         = None
@@ -503,7 +526,21 @@ if st.session_state.stage == 1:
                         f'</div>',
                         unsafe_allow_html=True,
                     )
-                    st.write(city_data.get("reason", ""))
+                    # Display tags in a fixed-height area
+                    tags = city_data.get("tags", [])[:3]
+                    if tags:
+                        tag_html = (
+                            '<div class="city-tag-area">'
+                            + "".join(f'<span class="city-tag">{t}</span>' for t in tags)
+                            + '</div>'
+                        )
+                        st.markdown(tag_html, unsafe_allow_html=True)
+                    else:
+                        reason = city_data.get("reason", "")
+                        st.markdown(
+                            f'<div class="city-tag-area">{reason}</div>',
+                            unsafe_allow_html=True,
+                        )
 
                     if st.button(
                         "Select →",
@@ -511,7 +548,7 @@ if st.session_state.stage == 1:
                         type="primary",
                         use_container_width=True,
                     ):
-                        _select_city(city_name)
+                        _select_city(city_name, city_data.get("tags", []))
                         st.rerun()
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -647,6 +684,7 @@ elif st.session_state.stage == 2:
                 hotel_context=hotel_context,
                 etiquette_context=etiquette_context,
                 pacing_context=pacing_context,
+                tags=st.session_state.selected_tags,
             )
             if not tips:
                 st.session_state.error = "The AI returned an empty guide. Please try again."
@@ -768,6 +806,15 @@ elif st.session_state.stage == 2:
                         with st.container(border=True):
                             st.markdown(label)
                             st.write(place.get("description", ""))
+                            mindful = place.get("mindful_moment", "")
+                            if mindful:
+                                st.markdown(
+                                    f'<div style="background:#f0fdf4;border-left:3px solid #52b788;'
+                                    f'padding:8px 12px;border-radius:4px;margin-top:8px;'
+                                    f'font-size:0.85rem;color:#1b4332;">'
+                                    f'🌱 <b>Mindful Moment</b><br>{mindful}</div>',
+                                    unsafe_allow_html=True,
+                                )
 
         st.divider()
 

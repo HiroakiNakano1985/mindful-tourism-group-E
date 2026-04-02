@@ -16,7 +16,7 @@ from google.genai import types
 load_dotenv()
 
 _API_KEY  = os.getenv("GEMINI_API_KEY", "")
-_MODEL_ID = "gemini-3-flash-preview"
+_MODEL_ID = "gemini-2.5-flash-lite"
 
 _client = genai.Client(api_key=_API_KEY)
 
@@ -91,14 +91,14 @@ def _parse_list_response(raw: str, label: str = "") -> list:
     return []
 
 
-def _generate(system: str, user: str, max_tokens: int = 2000) -> str:
+def _generate(system: str, user: str, max_tokens: int = 2000, temperature: float = 0.7) -> str:
     """Send a prompt to Gemini and return the response text."""
     response = _client.models.generate_content(
         model=_MODEL_ID,
         contents=user,
         config=types.GenerateContentConfig(
             system_instruction=system,
-            temperature=0.7,
+            temperature=temperature,
             max_output_tokens=max_tokens,
             response_mime_type="application/json",
         ),
@@ -155,43 +155,62 @@ def recommend_cities(
         "2. Never recommend the departure city mentioned in the request.\n"
         "3. Max 1 city per country.\n"
         f"4. {short_trip}\n\n"
+        "TAGS RULE: each city must have exactly 3 tags (max 4 words each). "
+        "Each tag MUST start with an emoji that represents the vibe. "
+        "Tags describe the VIBE, not venue names. "
+        "GOOD: '🍷 Wine marathon vineyards', '🎵 Fado bars at 2am', '🌅 Hilltop sunset kiosks' "
+        "BAD: 'Village Underground LX', 'Beautiful city', 'Great nightlife'\n\n"
         "Return a JSON array of 4 objects:\n"
-        "[{\"city\": \"Name, Country\", \"reason\": \"2-3 sentences\", "
+        "[{\"city\": \"Name, Country\", \"tags\": [\"tag1\", \"tag2\", \"tag3\"], "
         "\"flight_hours\": \"X-Y hours\", \"price_estimate\": \"€XXX-XXX\"}]"
     )
 
     try:
-        raw = _generate(system_msg, user_msg, max_tokens=4000)
-        cleaned = re.sub(r"```(?:json)?", "", raw).strip()
-        try:
-            result = json.loads(cleaned)
-            if isinstance(result, list):
+        for attempt in range(2):
+            temp = 0.3 if attempt == 0 else 0.5
+            raw = _generate(system_msg, user_msg, max_tokens=4000, temperature=temp)
+            result = _parse_list_response(raw, "cities")
+            if len(result) >= 3:
                 return result
-        except json.JSONDecodeError:
-            pass
-        result = _extract_json(raw, kind="array")
-        if not isinstance(result, list):
-            raise ValueError(f"Expected JSON array, got: {raw[:200]}")
-        return result
+        # Return whatever we got on last attempt
+        if result:
+            return result
+        raise ValueError(f"Expected JSON array, got: {raw[:200]}")
     except Exception as exc:
         raise RuntimeError(f"LLM city recommendation failed: {exc}") from exc
 
 
 # ── Stage 2: four parallel LLM calls ─────────────────────────────────────────
 
-def _generate_places(city: str, days: int, context: str, user_request: str) -> list:
-    """Generate recommended places."""
+def _generate_places(
+    city: str, days: int, context: str, user_request: str,
+    tags: list[str] | None = None,
+) -> list:
+    """Generate recommended places with mindful moments."""
     interest = f"The traveller's interests: {user_request}\n" if user_request else ""
     user_msg = (
         f"Destination: {city}, Trip: {days} day(s)\n"
         f"{interest}\n"
         f"--- Reference ---\n{context}\n--- End ---\n\n"
         f"Recommend 5-8 places in {city} tailored to the traveller's interests.\n"
+        + (
+            "The traveller chose this city because of these vibes: "
+            + ", ".join(tags) + ". "
+            "You MUST include at least one place that directly matches each of these vibes.\n"
+            if tags else ""
+        )
         + _SPECIFICITY_RULE.format(city=city) + "\n"
+        "For each place, include a 'mindful_moment': a short, specific suggestion "
+        "for how to EXPERIENCE this place (not just see it). "
+        "Examples: 'Sit in the back courtyard for 10 minutes without your phone — "
+        "notice the art on the ceiling that everyone misses.' or "
+        "'Walk through without buying anything first. Come back to the stall "
+        "with the best smell.'\n\n"
         "Return ONLY a JSON array:\n"
-        '[{"name": "Place Name", "description": "Why visit, what to do (2-3 sentences)"}]'
+        '[{"name": "Place Name", "description": "Why visit (2-3 sentences)", '
+        '"mindful_moment": "How to experience this place, not just see it"}]'
     )
-    raw = _generate(_SYSTEM_BASE, user_msg, max_tokens=1500)
+    raw = _generate(_SYSTEM_BASE, user_msg, max_tokens=8000)
     return _parse_list_response(raw, "places")
 
 
@@ -207,7 +226,7 @@ def _generate_hotels(city: str, hotel_context: str) -> list:
         "Return ONLY a JSON array:\n"
         '[{"name": "Hotel Name", "category": "budget/mid-range/luxury", "note": "one-line highlight from reviews"}]'
     )
-    raw = _generate(_SYSTEM_BASE, user_msg, max_tokens=2000)
+    raw = _generate(_SYSTEM_BASE, user_msg, max_tokens=8000)
     return _parse_list_response(raw, "hotels")
 
 
@@ -227,7 +246,7 @@ def _generate_etiquette(city: str, etiquette_context: str) -> list:
         "Return ONLY a JSON array of 5 strings:\n"
         '["tip 1", "tip 2", "tip 3", "tip 4", "tip 5"]'
     )
-    raw = _generate(_SYSTEM_BASE, user_msg, max_tokens=4000)
+    raw = _generate(_SYSTEM_BASE, user_msg, max_tokens=8000)
     return _parse_list_response(raw, "etiquette")
 
 
@@ -236,22 +255,24 @@ def _generate_pacing(city: str, days: int, pacing_context: str) -> list:
     user_msg = (
         f"City: {city}, Trip: {days} day(s)\n\n"
         f"--- Reference ---\n{pacing_context}\n--- End ---\n\n"
-        f"Give 7-10 mindful pacing tips SPECIFIC to {city}. "
+        f"Give exactly 8 mindful pacing tips SPECIFIC to {city}. "
         "Focus on DEPTH of experience, not efficiency.\n"
         + _SPECIFICITY_RULE.format(city=city) + "\n"
-        "Cover ALL 5 categories:\n"
+        "Cover these 6 categories (at least 1 tip each):\n"
         f"  1. TIME & SEASON: magic hour in {city}? locals-only cafe before 8am?\n"
         f"  2. LOCAL CONNECTION: where to meet real locals? non-touristy bar?\n"
         f"  3. QUALITY OF MOVEMENT: slower but beautiful route? walk that beats a taxi?\n"
         f"  4. DOING NOTHING: specific place where doing nothing is the point? "
         "Include a funny detail about why you'll spend 2 hours there.\n"
-        f"  5. LOCAL SCALE: when is lunch in {city}? what's 'nearby'?\n\n"
+        f"  5. LOCAL SCALE: when is lunch in {city}? what's 'nearby'?\n"
+        f"  6. SUSTAINABILITY: a specific eco-friendly tip for {city} "
+        "(e.g. 'tap water is drinkable', 'tram X has the same view as the €40 boat tour')\n\n"
         "Examples of BAD tips (NEVER write):\n"
         '  - "Book in advance" / "Use public transport" / "Find a quiet bench"\n\n'
-        "Return ONLY a JSON array of 7-10 strings:\n"
+        "Return ONLY a JSON array of exactly 8 strings:\n"
         '["tip 1", "tip 2", ...]'
     )
-    raw = _generate(_SYSTEM_BASE, user_msg, max_tokens=3000)
+    raw = _generate(_SYSTEM_BASE, user_msg, max_tokens=8000)
     return _parse_list_response(raw, "pacing")
 
 
@@ -263,6 +284,7 @@ def generate_mindful_tips(
     hotel_context: str = "",
     etiquette_context: str = "",
     pacing_context: str = "",
+    tags: list[str] | None = None,
 ) -> dict:
     """
     Generate all four sections in parallel using ThreadPoolExecutor.
@@ -272,10 +294,14 @@ def generate_mindful_tips(
 
     with ThreadPoolExecutor(max_workers=4) as executor:
         futures = {
-            executor.submit(_generate_places, city, days, context, user_request): "recommended_places",
+            executor.submit(
+                _generate_places, city, days, context, user_request, tags,
+            ): "recommended_places",
             executor.submit(_generate_hotels, city, hotel_context): "hotels",
             executor.submit(_generate_etiquette, city, etiquette_context): "etiquette",
-            executor.submit(_generate_pacing, city, days, pacing_context): "pacing_advice",
+            executor.submit(
+                _generate_pacing, city, days, pacing_context,
+            ): "pacing_advice",
         }
         for future in as_completed(futures):
             key = futures[future]
