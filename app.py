@@ -884,6 +884,13 @@ elif st.session_state.stage == 2:
                     )
                     with cols[j]:
                         with st.container(border=True):
+                            hotel_img = get_city_image(f"{hotel_name}, {city}")
+                            if hotel_img:
+                                st.markdown(
+                                    f'<img src="{hotel_img}" style="width:100%;height:140px;'
+                                    f'object-fit:cover;border-radius:8px;">',
+                                    unsafe_allow_html=True,
+                                )
                             st.markdown(f"{badge} **{hotel_label}**")
                             st.markdown(
                                 f'<span style="color:#f59e0b;font-size:1.1rem;">{stars}</span>'
