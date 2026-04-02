@@ -1,9 +1,6 @@
 # Environment variables (contains API tokens)
 .env
 
-# All data (large files, rebuilt by ingest scripts)
-data/
-
 # Claude Code
 .claude/
 
