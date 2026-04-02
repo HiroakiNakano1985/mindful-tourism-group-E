@@ -1,6 +1,7 @@
 # 🌍 Mindful Tourism App — Group E
 
 ---
+http://34.247.194.233:8501/  
 
 ## The Problem
 
