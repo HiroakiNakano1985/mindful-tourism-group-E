@@ -1,22 +1,26 @@
 """
-RAG retriever: searches all available ChromaDB collections and returns
+RAG retriever: searches ChromaDB collections and returns
 a combined context string for the LLM.
 
-Collections queried (in order):
-  1. 'wikivoyage'  – Phase 1 data
-  2. 'web_crawled' – Phase 2 data (skipped gracefully if not yet ingested)
+Collections:
+  - 'wikivoyage'    – general city guides (Phase 1)
+  - 'reddit_tips'   – niche travel tips from Reddit (Phase 2)
+  - 'google_places' – hotel/restaurant reviews (Phase 2, future)
+
+The `retrieve()` method accepts a `collections` parameter so callers
+can choose which sources to search per section (e.g. etiquette from
+wikivoyage + reddit, hotels from wikivoyage only).
 """
 from __future__ import annotations
 
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 
-from rag.cities import CHROMA_DIR, CITY_ALIASES, EMBED_MODEL
+from rag.cities import ALL_COLLECTIONS, CHROMA_DIR, CITY_ALIASES, EMBED_MODEL
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
-COLLECTIONS = ["wikivoyage", "web_crawled"]
-N_RESULTS   = 5   # chunks to retrieve per city key per collection
+N_RESULTS = 5   # chunks to retrieve per city key per collection
 
 # ── Retriever class ───────────────────────────────────────────────────────────
 
@@ -54,42 +58,45 @@ class TravelRetriever:
             return None
 
     def _normalise_city(self, city: str) -> str:
-        """
-        Strip country suffix: 'Lisbon, Portugal' → 'Lisbon'.
-        ChromaDB metadata stores just the bare city name.
-        """
+        """Strip country suffix: 'Lisbon, Portugal' → 'Lisbon'."""
         return city.split(",")[0].strip()
 
     def _city_keys(self, city: str) -> list[str]:
-        """
-        Return the list of metadata keys to search for *city*.
-        Handles aliases (e.g. Malta ↔ Valletta) so both collections
-        are searched when either name is selected.
-        """
+        """Return metadata keys for *city*, including aliases."""
         key = self._normalise_city(city)
         return CITY_ALIASES.get(key, [key])
 
     # ── public API ────────────────────────────────────────────────────────────
 
-    def retrieve(self, city: str, query: str, n_results: int = N_RESULTS) -> str:
+    def retrieve(
+        self,
+        city: str,
+        query: str,
+        collections: list[str] | None = None,
+        n_results: int = N_RESULTS,
+    ) -> str:
         """
         Retrieve relevant text chunks for *city* using semantic similarity.
 
-        Strategy
-        --------
-        1. For each city key (including aliases), run a filtered similarity
-           search in every available collection.
-        2. If the filtered search returns nothing for ALL keys, return a
-           fallback message — do NOT fall back to an unfiltered search,
-           which would mix in unrelated cities and mislead the LLM.
-        3. Deduplicate and concatenate results.
+        Parameters
+        ----------
+        city : str
+            Destination city (may include country suffix).
+        query : str
+            Semantic search query.
+        collections : list[str] | None
+            Which ChromaDB collections to search.
+            Defaults to ALL_COLLECTIONS if not specified.
+        n_results : int
+            Number of chunks per city key per collection.
 
         Returns a single string ready to be injected into the LLM prompt.
         """
+        search_collections = collections or ALL_COLLECTIONS
         city_keys  = self._city_keys(city)
         collected: list[str] = []
 
-        for name in COLLECTIONS:
+        for name in search_collections:
             store = self._load_store(name)
             if store is None:
                 continue

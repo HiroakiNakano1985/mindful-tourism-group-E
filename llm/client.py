@@ -189,6 +189,8 @@ def generate_mindful_tips(
     context: str,
     user_request: str = "",
     hotel_context: str = "",
+    etiquette_context: str = "",
+    pacing_context: str = "",
 ) -> dict:
     """
     Generate mindful travel tips for *city* using retrieved RAG *context*.
@@ -243,11 +245,48 @@ def generate_mindful_tips(
                         "--- Accommodation reference ---\n"
                         f"{hotel_context if hotel_context else 'No accommodation data available.'}\n"
                         "--- End accommodation reference ---\n\n"
-                        "Using the references above, generate a mindful travel guide.\n"
+                        "--- Etiquette reference (tourist mistakes, scams, local norms) ---\n"
+                        f"{etiquette_context if etiquette_context else 'No etiquette data available.'}\n"
+                        "--- End etiquette reference ---\n\n"
+                        "--- Pacing reference (timing, schedules, itinerary pitfalls) ---\n"
+                        f"{pacing_context if pacing_context else 'No pacing data available.'}\n"
+                        "--- End pacing reference ---\n\n"
+                        "Using ALL references above, generate a mindful travel guide.\n"
                         "For hotels: extract real hotel names from the Accommodation reference. "
                         "If none are mentioned, use an empty array.\n"
-                        "recommended_places must contain 5-8 places tailored to the traveller's interests.\n"
-                        "etiquette must contain at least 5 tips.\n"
+                        "recommended_places must contain 5-8 places tailored to the traveller's interests.\n\n"
+                        "CRITICAL INSTRUCTION FOR ETIQUETTE AND PACING:\n"
+                        "You MUST extract specific facts from the Reference sections above.\n"
+                        "DO NOT fall back on generic travel advice. If a tip could apply to any city, "
+                        "it is too generic — rewrite it with a specific detail about " + city + ".\n"
+                        "TONE: Write like a witty friend who's been there, not a guidebook. "
+                        "Add humor — sarcasm, self-deprecation, funny warnings are encouraged. "
+                        "Make the reader smile while learning something useful.\n\n"
+                        f"etiquette: Give 5 tips SPECIFIC to {city}. Each tip must mention a "
+                        "specific place, street, neighborhood, or custom unique to this city. "
+                        "Pull from the Etiquette reference above. Examples of GOOD tips:\n"
+                        f'  - "In {city}, restaurants add a coperto (cover charge) of €2-3 — this is normal, not a scam"\n'
+                        f'  - "The waiters at Place X in {city} will ignore you if you wave — make eye contact instead"\n'
+                        "Examples of BAD tips (too generic — NEVER write these):\n"
+                        '  - "Be aware of pickpockets" / "Avoid tourist traps" / "Respect local customs"\n\n'
+                        f"pacing_advice: Give 7-10 tips SPECIFIC to {city}. "
+                        "This is a MINDFUL travel guide — focus on DEPTH of experience, not efficiency. "
+                        "Each tip MUST mention a specific place, street, route, or time in this city. "
+                        "Pull from the Pacing reference above. Cover ALL 5 categories:\n\n"
+                        f"  1. TIME & SEASON: What's the magic hour in {city}? "
+                        "Which cafe is locals-only before 8am? Which market has fresh fish only on Wednesday mornings?\n"
+                        f"  2. LOCAL CONNECTION: Where to meet real locals in {city}? "
+                        "A non-touristy bar, a sports match viewing spot, a food stall where the owner talks to you?\n"
+                        f"  3. QUALITY OF MOVEMENT: A route that's slower but beautiful. "
+                        "A bus ride with better views than the metro. A 20-min walk that beats a €10 taxi.\n"
+                        f"  4. DOING NOTHING: Name a SPECIFIC place in {city} where doing nothing is the point. "
+                        "A plaza with old men playing chess. A park kiosk selling €1 espresso. A hidden bench with a view. "
+                        "Include a funny detail about why you'll accidentally spend 2 hours there.\n"
+                        f"  5. LOCAL SCALE: How do locals in {city} think about time and distance? "
+                        "When is lunch? Is 30min considered 'nearby'? What time is 'early' for dinner?\n\n"
+                        "Examples of BAD tips (NEVER write these):\n"
+                        '  - "Book in advance" / "Use public transport" / "Find a quiet bench"\n'
+                        '  - Any tip that could apply to ANY city is too generic. Rewrite with {city}-specific detail.\n\n'
                         "Return ONLY a JSON object — no extra text — with this exact structure:\n"
                         "{\n"
                         '  "recommended_places": [\n'
@@ -256,8 +295,8 @@ def generate_mindful_tips(
                         '  "hotels": [\n'
                         '    {"name": "Hotel Name", "category": "budget/mid-range/luxury", "note": "one-line highlight"}\n'
                         "  ],\n"
-                        '  "etiquette": ["tip 1", "tip 2", "tip 3", "tip 4", "tip 5"],\n'
-                        '  "pacing_advice": "Two or three sentences of mindful pacing advice"\n'
+                        '  "etiquette": ["specific surprising tip 1", "specific surprising tip 2", "...", "...", "..."],\n'
+                        '  "pacing_advice": ["timing tip", "transport tip", "reservation tip", "budget tip", "pacing tip"]\n'
                         "}"
                     ),
                 },

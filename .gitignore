@@ -1,12 +1,11 @@
 # Environment variables (contains API tokens)
 .env
 
-# ChromaDB data (large binary files, rebuilt by ingest script)
-data/chroma/
+# All data (large files, rebuilt by ingest scripts)
+data/
 
-# Raw WikiVoyage text (rebuilt by ingest script)
-data/wikivoyage/
-data/crawled/
+# Claude Code
+.claude/
 
 # Python cache
 __pycache__/

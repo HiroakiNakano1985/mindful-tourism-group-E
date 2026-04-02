@@ -12,8 +12,13 @@ EMBED_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 # ChromaDB persistence directory (relative to project root).
 CHROMA_DIR = "./data/chroma"
 
-# Collection name for WikiVoyage data.
-COLLECTION = "wikivoyage"
+# Collection names.
+COLLECTION                = "wikivoyage"      # Phase 1: WikiVoyage articles
+REDDIT_COLLECTION         = "reddit_tips"     # Phase 2: Reddit travel tips
+GOOGLE_PLACES_COLLECTION  = "google_places"   # Phase 2: Google Places reviews
+
+# All available collections (used as default search scope).
+ALL_COLLECTIONS = [COLLECTION, REDDIT_COLLECTION, GOOGLE_PLACES_COLLECTION]
 
 # Cities whose WikiVoyage data is stored under multiple metadata keys.
 # When searching for a key city, all aliases are searched together.
