@@ -6,12 +6,12 @@
 
 This prototype helps users discover travel destinations mindfully. It works in two stages:
 
-- **Stage 1** — The user describes a trip in natural language. An LLM recommends 3–4 destinations from a curated city list, with estimated flight times, costs, and city images.
-- **Stage 2** — The user selects a city. A RAG pipeline retrieves local knowledge from three data sources (WikiVoyage, Reddit, Google Places) via ChromaDB, and the LLM generates:
-  - **Recommended Places** — tailored to the user's interests, with embedded Google Maps
-  - **Where to Stay** — hotels with reviews from Google Places, with Booking.com links
-  - **Local Etiquette** — specific, surprising insider tips (not generic advice)
-  - **Mindful Pacing** — practical timing, transport, and "doing nothing" tips
+- **Stage 1** — The user describes a trip in natural language. Gemini 3 Flash recommends 4 destinations from a curated list of 52 cities, with estimated flight times, costs, city images, and tailored reasons.
+- **Stage 2** — The user selects a city. A RAG pipeline retrieves local knowledge from three data sources (WikiVoyage, Reddit, Google Places) via ChromaDB, and 4 parallel LLM calls generate:
+  - **Recommended Places** — tailored to the user's interests, plotted on an interactive Folium map
+  - **Where to Stay** — hotels extracted from Google Places reviews, with Booking.com links and map markers
+  - **Local Etiquette** — specific, surprising insider tips written in a witty tone (not generic advice)
+  - **Mindful Pacing** — practical tips covering timing, local connections, scenic routes, "doing nothing" spots, and local pace of life
 
 ---
 
@@ -19,11 +19,12 @@ This prototype helps users discover travel destinations mindfully. It works in t
 
 | Layer | Technology |
 |-------|-----------|
-| Frontend | Streamlit (sidebar layout, 2-column cards) |
-| LLM | HuggingFace Inference API (`Qwen/Qwen2.5-7B-Instruct`) |
+| Frontend | Streamlit (sidebar layout, 2-column cards, interactive maps) |
+| LLM | Google Gemini 3 Flash Preview (JSON mode, 4 parallel calls) |
 | Embeddings | `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` |
 | Vector DB | ChromaDB (persistent, 3 collections) |
 | RAG | LangChain + LangChain-Chroma |
+| Maps | Folium + OpenStreetMap (with Nominatim + Google Places geocoding fallback) |
 | Data sources | WikiVoyage API, Reddit (Pullpush API), Google Places API (New) |
 
 ---
@@ -42,7 +43,30 @@ Section-specific retrieval:
   📍 Recommended Places  → wikivoyage + reddit_tips
   🏨 Where to Stay       → wikivoyage + google_places
   🙏 Local Etiquette     → wikivoyage + reddit_tips (tourist mistakes, scams)
-  🌿 Mindful Pacing      → wikivoyage + reddit_tips (timing, transport, quiet spots)
+  🌿 Mindful Pacing      → wikivoyage + reddit_tips (timing, quiet spots, local pace)
+```
+
+---
+
+## LLM Architecture
+
+Stage 2 uses 4 parallel Gemini calls instead of a single monolithic call, improving both quality and speed:
+
+```
+User selects a city
+        ↓
+  4 RAG queries (section-specific)
+        ↓
+  ┌─────────────────────────────────────────────────────┐
+  │ Parallel LLM calls (ThreadPoolExecutor)             │
+  │                                                     │
+  │  _generate_places()    → recommended_places         │
+  │  _generate_hotels()    → hotels                     │
+  │  _generate_etiquette() → etiquette                  │
+  │  _generate_pacing()    → pacing_advice              │
+  └─────────────────────────────────────────────────────┘
+        ↓
+  Combined result → Streamlit UI
 ```
 
 ---
@@ -58,7 +82,7 @@ mindful-tourism-group-E/
 ├── .gitattributes                # Git LFS tracking rules
 │
 ├── llm/
-│   └── client.py                 # HuggingFace Inference API (Stage 1 & 2)
+│   └── client.py                 # Gemini API (Stage 1 + 4 parallel Stage 2 calls)
 │
 ├── rag/
 │   ├── cities.py                 # Shared constants, city list, collection names
@@ -72,7 +96,7 @@ mindful-tourism-group-E/
     ├── wikivoyage/               # Raw WikiVoyage text
     ├── reddit/                   # Raw Reddit posts/comments
     ├── google_places/            # Raw Google Places reviews
-    └── chroma/                   # ChromaDB vector store
+    └── chroma/                   # ChromaDB vector store (3 collections)
 ```
 
 ---
@@ -95,10 +119,12 @@ Edit `.env`:
 
 ```
 HUGGINGFACE_API_TOKEN=hf_xxxxxxxxxxxxxxxxxxxxxxxxxxxx
+GEMINI_API_KEY=your_gemini_api_key
 GOOGLE_PLACES_API_KEY=AIza_xxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
-- HuggingFace token: https://huggingface.co/settings/tokens
+- HuggingFace token (for embeddings): https://huggingface.co/settings/tokens
+- Gemini API key: https://aistudio.google.com/apikey
 - Google Places API key: https://console.cloud.google.com/
 
 ### 3. Data setup
@@ -166,9 +192,10 @@ streamlit run app.py --server.runOnSave true
 ## Notes
 
 - `data/` is managed with Git LFS. Run `git lfs pull` after cloning.
-- The HuggingFace free tier has rate limits. Requests may occasionally be slow or time out.
+- Gemini 3 Flash Preview is used with JSON mode (`response_mime_type="application/json"`) for reliable structured output.
 - Reddit data is fetched via Pullpush (community Reddit archive) — no Reddit API key required.
 - Google Places API has a $200/month free credit — more than enough for prototyping.
+- Geocoding uses Nominatim (free) with Google Places API as fallback for better coverage.
 
 ---
 ---
@@ -181,12 +208,12 @@ streamlit run app.py --server.runOnSave true
 
 このプロトタイプは、ユーザーが「マインドフル」に旅先を選ぶことをサポートします。2つのステージで動作します：
 
-- **Stage 1** — ユーザーが自然言語で旅のリクエストを入力。LLMがキュレーションされた都市リストから3〜4件の候補を推薦し、フライト時間・費用目安・都市画像を表示します。
-- **Stage 2** — ユーザーが都市を選択。3つのデータソース（WikiVoyage・Reddit・Google Places）からRAGパイプラインがChromaDB経由で情報を検索し、LLMが以下を生成します：
-  - **おすすめスポット** — ユーザーの興味に合わせた場所提案（Google Maps埋め込み付き）
-  - **ホテル情報** — Google Placesのレビュー付き（Booking.comリンク付き）
-  - **ローカルエチケット** — 観光客がやりがちなミス、具体的で驚きのある tips
-  - **マインドフルペーシング** — 時間帯・移動・「何もしない」提案など実用的な tips
+- **Stage 1** — ユーザーが自然言語で旅のリクエストを入力。Gemini 3 Flashが52都市のリストから4件の候補を推薦し、フライト時間・費用目安・都市画像を表示します。
+- **Stage 2** — ユーザーが都市を選択。3つのデータソース（WikiVoyage・Reddit・Google Places）からRAGパイプラインが情報を検索し、4つの並列LLM呼び出しで以下を生成します：
+  - **おすすめスポット** — ユーザーの興味に合わせた場所提案（Foliumインタラクティブマップ付き）
+  - **ホテル情報** — Google Placesレビューから抽出（Booking.comリンク・マップマーカー付き）
+  - **ローカルエチケット** — ウィットに富んだ都市固有のインサイダー tips
+  - **マインドフルペーシング** — 時間帯・地元との接点・景色の良いルート・「何もしない」スポット・地元の時間感覚
 
 ---
 
@@ -194,11 +221,12 @@ streamlit run app.py --server.runOnSave true
 
 | レイヤー | 技術 |
 |--------|------|
-| フロントエンド | Streamlit（サイドバー、2カラムカード） |
-| LLM | HuggingFace Inference API（`Qwen/Qwen2.5-7B-Instruct`） |
+| フロントエンド | Streamlit（サイドバー、2カラムカード、インタラクティブマップ） |
+| LLM | Google Gemini 3 Flash Preview（JSONモード、4並列呼び出し） |
 | 埋め込みモデル | `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` |
 | ベクターDB | ChromaDB（永続化、3コレクション） |
 | RAG | LangChain + LangChain-Chroma |
+| 地図 | Folium + OpenStreetMap（Nominatim + Google Places ジオコーディング） |
 | データソース | WikiVoyage API、Reddit（Pullpush API）、Google Places API（New） |
 
 ---
@@ -222,6 +250,29 @@ ChromaDB
 
 ---
 
+## LLM アーキテクチャ
+
+Stage 2 では単一の巨大な呼び出しではなく、4つの並列 Gemini 呼び出しを使用し、品質と速度を両立：
+
+```
+ユーザーが都市を選択
+        ↓
+  4つの RAG クエリ（セクション別）
+        ↓
+  ┌─────────────────────────────────────────────────────┐
+  │ 並列 LLM 呼び出し（ThreadPoolExecutor）              │
+  │                                                     │
+  │  _generate_places()    → おすすめスポット             │
+  │  _generate_hotels()    → ホテル情報                  │
+  │  _generate_etiquette() → ローカルエチケット           │
+  │  _generate_pacing()    → マインドフルペーシング        │
+  └─────────────────────────────────────────────────────┘
+        ↓
+  統合結果 → Streamlit UI
+```
+
+---
+
 ## ファイル構成
 
 ```
@@ -233,7 +284,7 @@ mindful-tourism-group-E/
 ├── .gitattributes                # Git LFS 追跡ルール
 │
 ├── llm/
-│   └── client.py                 # HuggingFace Inference API 呼び出し
+│   └── client.py                 # Gemini API（Stage 1 + 4並列 Stage 2）
 │
 ├── rag/
 │   ├── cities.py                 # 共有定数・都市リスト・コレクション名
@@ -247,7 +298,7 @@ mindful-tourism-group-E/
     ├── wikivoyage/               # WikiVoyage 生テキスト
     ├── reddit/                   # Reddit 投稿・コメント
     ├── google_places/            # Google Places レビュー
-    └── chroma/                   # ChromaDB ベクターストア
+    └── chroma/                   # ChromaDB ベクターストア（3コレクション）
 ```
 
 ---
@@ -270,10 +321,12 @@ cp .env.example .env
 
 ```
 HUGGINGFACE_API_TOKEN=hf_xxxxxxxxxxxxxxxxxxxxxxxxxxxx
+GEMINI_API_KEY=your_gemini_api_key
 GOOGLE_PLACES_API_KEY=AIza_xxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
-- HuggingFace トークン: https://huggingface.co/settings/tokens
+- HuggingFace トークン（埋め込みモデル用）: https://huggingface.co/settings/tokens
+- Gemini API キー: https://aistudio.google.com/apikey
 - Google Places API キー: https://console.cloud.google.com/
 
 ### 3. データのセットアップ
@@ -341,6 +394,7 @@ streamlit run app.py --server.runOnSave true
 ## 注意事項
 
 - `data/` は Git LFS で管理されています。クローン後に `git lfs pull` を実行してください。
-- HuggingFace の無料枠はレートリミットがあります。まれにリクエストが遅延・タイムアウトする場合があります。
+- Gemini 3 Flash Preview を JSON モード（`response_mime_type="application/json"`）で使用し、安定した構造化出力を実現しています。
 - Reddit データは Pullpush（コミュニティ運営の Reddit アーカイブ）経由で取得しています。Reddit API キーは不要です。
 - Google Places API は月 $200 の無料クレジットがあり、プロトタイプ用途では十分です。
+- ジオコーディングは Nominatim（無料）を使用し、Google Places API をフォールバックとして併用しています。
