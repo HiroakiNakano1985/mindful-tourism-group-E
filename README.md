@@ -6,12 +6,13 @@
 
 This prototype helps users discover travel destinations mindfully. It works in two stages:
 
-- **Stage 1** — The user describes a trip in natural language. Gemini 3 Flash recommends 4 destinations from a curated list of 52 cities, with estimated flight times, costs, city images, and tailored reasons.
-- **Stage 2** — The user selects a city. A RAG pipeline retrieves local knowledge from three data sources (WikiVoyage, Reddit, Google Places) via ChromaDB, and 4 parallel LLM calls generate:
-  - **Recommended Places** — tailored to the user's interests, plotted on an interactive Folium map
-  - **Where to Stay** — hotels extracted from Google Places reviews, with Booking.com links and map markers
-  - **Local Etiquette** — specific, surprising insider tips written in a witty tone (not generic advice)
-  - **Mindful Pacing** — practical tips covering timing, local connections, scenic routes, "doing nothing" spots, and local pace of life
+- **Stage 1** — The user describes a trip in natural language. Gemini 2.5 Flash recommends 4 destinations from a curated list of 52 cities, each with a photo, vibe tags, flight time, and price estimate.
+- **Stage 2** — The user selects a city. A RAG pipeline retrieves local knowledge from three data sources (WikiVoyage, Reddit, Google Places) via ChromaDB, and 5 parallel LLM calls generate:
+  - **City Info** — language, currency, timezone, and climate at a glance
+  - **Recommended Places** — tailored to the user's interests, with photos, an interactive Folium map, and a "Mindful Moment" for each spot
+  - **Where to Stay** — hotels extracted from Google Places reviews, with star ratings and Booking.com links
+  - **Local Etiquette** — specific, positive insider tips (not generic warnings)
+  - **Mindful Pacing** — 8 tips across 6 categories: timing, local connection, movement, doing nothing, local scale, and sustainability
 
 ---
 
@@ -20,11 +21,12 @@ This prototype helps users discover travel destinations mindfully. It works in t
 | Layer | Technology |
 |-------|-----------|
 | Frontend | Streamlit (sidebar layout, 2-column cards, interactive maps) |
-| LLM | Google Gemini 3 Flash Preview (JSON mode, 4 parallel calls) |
+| LLM | Google Gemini 2.5 Flash Lite (JSON mode, 5 parallel calls) |
 | Embeddings | `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` |
 | Vector DB | ChromaDB (persistent, 3 collections) |
 | RAG | LangChain + LangChain-Chroma |
-| Maps | Folium + OpenStreetMap (with Nominatim + Google Places geocoding fallback) |
+| Maps | Folium + OpenStreetMap (Nominatim + Google Places geocoding fallback) |
+| Photos | Google Places Photos API |
 | Data sources | WikiVoyage API, Reddit (Pullpush API), Google Places API (New) |
 
 ---
@@ -42,15 +44,15 @@ ChromaDB
 Section-specific retrieval:
   📍 Recommended Places  → wikivoyage + reddit_tips
   🏨 Where to Stay       → wikivoyage + google_places
-  🙏 Local Etiquette     → wikivoyage + reddit_tips (tourist mistakes, scams)
-  🌿 Mindful Pacing      → wikivoyage + reddit_tips (timing, quiet spots, local pace)
+  🙏 Local Etiquette     → wikivoyage + reddit_tips
+  🌿 Mindful Pacing      → wikivoyage + reddit_tips
 ```
 
 ---
 
 ## LLM Architecture
 
-Stage 2 uses 4 parallel Gemini calls instead of a single monolithic call, improving both quality and speed:
+Stage 2 uses 5 parallel Gemini calls for quality and speed:
 
 ```
 User selects a city
@@ -58,16 +60,27 @@ User selects a city
   4 RAG queries (section-specific)
         ↓
   ┌─────────────────────────────────────────────────────┐
-  │ Parallel LLM calls (ThreadPoolExecutor)             │
+  │ Parallel LLM calls (ThreadPoolExecutor, 5 workers)  │
   │                                                     │
-  │  _generate_places()    → recommended_places         │
-  │  _generate_hotels()    → hotels                     │
-  │  _generate_etiquette() → etiquette                  │
-  │  _generate_pacing()    → pacing_advice              │
+  │  _generate_city_info()  → language, currency, etc.  │
+  │  _generate_places()     → recommended places        │
+  │  _generate_hotels()     → hotels from reviews       │
+  │  _generate_etiquette()  → etiquette tips            │
+  │  _generate_pacing()     → mindful pacing tips       │
   └─────────────────────────────────────────────────────┘
         ↓
   Combined result → Streamlit UI
 ```
+
+---
+
+## Key Features
+
+- **Vibe Tags** — Stage 1 city cards show emoji-tagged vibes (e.g. "🍷 Wine marathon vineyards") instead of generic descriptions. Tags carry through to Stage 2 to ensure recommended places match.
+- **Mindful Moments** — Each recommended place includes a specific suggestion for how to *experience* it, not just visit it (e.g. "Walk through without buying anything first. Come back to the stall with the best smell.").
+- **Combined Map** — All places (numbered) and hotels (lettered, color-coded by category) shown on a single interactive map.
+- **Categorized Pacing** — Tips are grouped by category (⏰ Timing, 🤝 Connection, 🚶 Movement, ☕ Doing Nothing, 📍 Local Scale, 🌱 Sustainability) with color-coded cards.
+- **Google Places Photos** — City and place images sourced from Google Places for comprehensive coverage.
 
 ---
 
@@ -82,7 +95,7 @@ mindful-tourism-group-E/
 ├── .gitattributes                # Git LFS tracking rules
 │
 ├── llm/
-│   └── client.py                 # Gemini API (Stage 1 + 4 parallel Stage 2 calls)
+│   └── client.py                 # Gemini API (Stage 1 + 5 parallel Stage 2 calls)
 │
 ├── rag/
 │   ├── cities.py                 # Shared constants, city list, collection names
@@ -192,10 +205,11 @@ streamlit run app.py --server.runOnSave true
 ## Notes
 
 - `data/` is managed with Git LFS. Run `git lfs pull` after cloning.
-- Gemini 3 Flash Preview is used with JSON mode (`response_mime_type="application/json"`) for reliable structured output.
+- Gemini 2.5 Flash Lite is used with JSON mode (`response_mime_type="application/json"`) for reliable structured output.
 - Reddit data is fetched via Pullpush (community Reddit archive) — no Reddit API key required.
 - Google Places API has a $200/month free credit — more than enough for prototyping.
 - Geocoding uses Nominatim (free) with Google Places API as fallback for better coverage.
+- Photos are sourced from Google Places Photos API with 24-hour caching.
 
 ---
 ---
@@ -208,12 +222,13 @@ streamlit run app.py --server.runOnSave true
 
 このプロトタイプは、ユーザーが「マインドフル」に旅先を選ぶことをサポートします。2つのステージで動作します：
 
-- **Stage 1** — ユーザーが自然言語で旅のリクエストを入力。Gemini 3 Flashが52都市のリストから4件の候補を推薦し、フライト時間・費用目安・都市画像を表示します。
-- **Stage 2** — ユーザーが都市を選択。3つのデータソース（WikiVoyage・Reddit・Google Places）からRAGパイプラインが情報を検索し、4つの並列LLM呼び出しで以下を生成します：
-  - **おすすめスポット** — ユーザーの興味に合わせた場所提案（Foliumインタラクティブマップ付き）
-  - **ホテル情報** — Google Placesレビューから抽出（Booking.comリンク・マップマーカー付き）
-  - **ローカルエチケット** — ウィットに富んだ都市固有のインサイダー tips
-  - **マインドフルペーシング** — 時間帯・地元との接点・景色の良いルート・「何もしない」スポット・地元の時間感覚
+- **Stage 1** — ユーザーが自然言語で旅のリクエストを入力。Gemini 2.5 Flashが52都市のリストから4件の候補を推薦し、写真・バイブタグ・フライト時間・費用目安を表示します。
+- **Stage 2** — ユーザーが都市を選択。3つのデータソース（WikiVoyage・Reddit・Google Places）からRAGパイプラインが情報を検索し、5つの並列LLM呼び出しで以下を生成します：
+  - **都市情報** — 言語・通貨・タイムゾーン・気候を一目で表示
+  - **おすすめスポット** — ユーザーの興味に合わせた場所提案（写真・インタラクティブマップ・「Mindful Moment」付き）
+  - **ホテル情報** — Google Placesレビューから抽出（星レーティング・Booking.comリンク付き）
+  - **ローカルエチケット** — ポジティブで具体的なインサイダー tips
+  - **マインドフルペーシング** — 6カテゴリ（時間帯・地元接点・移動・何もしない・地元感覚・サステナビリティ）の8つの tips
 
 ---
 
@@ -222,84 +237,23 @@ streamlit run app.py --server.runOnSave true
 | レイヤー | 技術 |
 |--------|------|
 | フロントエンド | Streamlit（サイドバー、2カラムカード、インタラクティブマップ） |
-| LLM | Google Gemini 3 Flash Preview（JSONモード、4並列呼び出し） |
+| LLM | Google Gemini 2.5 Flash Lite（JSONモード、5並列呼び出し） |
 | 埋め込みモデル | `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` |
 | ベクターDB | ChromaDB（永続化、3コレクション） |
 | RAG | LangChain + LangChain-Chroma |
 | 地図 | Folium + OpenStreetMap（Nominatim + Google Places ジオコーディング） |
+| 写真 | Google Places Photos API |
 | データソース | WikiVoyage API、Reddit（Pullpush API）、Google Places API（New） |
 
 ---
 
-## RAG アーキテクチャ
+## 主な機能
 
-ガイドの各セクションごとに異なる ChromaDB コレクションを検索し、最適なコンテキストを取得します：
-
-```
-ChromaDB
-├── wikivoyage       ← 都市の概要・基本情報（52都市）
-├── reddit_tips      ← ニッチなクチコミ・裏知識・隠れた名所
-└── google_places    ← ホテル・レストランのレビュー・評価
-
-セクション別検索:
-  📍 おすすめスポット      → wikivoyage + reddit_tips
-  🏨 ホテル情報           → wikivoyage + google_places
-  🙏 ローカルエチケット    → wikivoyage + reddit_tips
-  🌿 マインドフルペーシング → wikivoyage + reddit_tips
-```
-
----
-
-## LLM アーキテクチャ
-
-Stage 2 では単一の巨大な呼び出しではなく、4つの並列 Gemini 呼び出しを使用し、品質と速度を両立：
-
-```
-ユーザーが都市を選択
-        ↓
-  4つの RAG クエリ（セクション別）
-        ↓
-  ┌─────────────────────────────────────────────────────┐
-  │ 並列 LLM 呼び出し（ThreadPoolExecutor）              │
-  │                                                     │
-  │  _generate_places()    → おすすめスポット             │
-  │  _generate_hotels()    → ホテル情報                  │
-  │  _generate_etiquette() → ローカルエチケット           │
-  │  _generate_pacing()    → マインドフルペーシング        │
-  └─────────────────────────────────────────────────────┘
-        ↓
-  統合結果 → Streamlit UI
-```
-
----
-
-## ファイル構成
-
-```
-mindful-tourism-group-E/
-├── app.py                        # Streamlit メインアプリ（サイドバー + 2ステージ UI）
-├── requirements.txt
-├── .env.example                  # APIトークンのテンプレート
-├── .gitignore
-├── .gitattributes                # Git LFS 追跡ルール
-│
-├── llm/
-│   └── client.py                 # Gemini API（Stage 1 + 4並列 Stage 2）
-│
-├── rag/
-│   ├── cities.py                 # 共有定数・都市リスト・コレクション名
-│   ├── ingest_wikivoyage.py      # WikiVoyage API → ChromaDB
-│   ├── ingest_reddit.py          # Reddit（Pullpush API）→ ChromaDB
-│   ├── ingest_google_places.py   # Google Places API → ChromaDB
-│   ├── ingest_crawler.py         # Webクローリングスタブ（将来用）
-│   └── retriever.py              # セクション別マルチコレクション検索
-│
-└── data/                         # Git LFS で管理
-    ├── wikivoyage/               # WikiVoyage 生テキスト
-    ├── reddit/                   # Reddit 投稿・コメント
-    ├── google_places/            # Google Places レビュー
-    └── chroma/                   # ChromaDB ベクターストア（3コレクション）
-```
+- **バイブタグ** — Stage 1 の都市カードに絵文字付きタグ（例：「🍷 Wine marathon vineyards」）を表示。Stage 2 でもタグに対応した場所を推薦。
+- **Mindful Moment** — 各スポットに「訪れる」だけでなく「体験する」ための具体的な提案を付与。
+- **統合マップ** — おすすめスポット（番号付き）とホテル（カテゴリ色分け）を1つのインタラクティブマップに表示。
+- **カテゴリ別ペーシング** — tips を6カテゴリ（⏰ 時間帯、🤝 地元接点、🚶 移動、☕ 何もしない、📍 地元感覚、🌱 サステナビリティ）で色分け表示。
+- **Google Places 写真** — 都市画像・スポット画像ともに Google Places から取得し、カバレッジを最大化。
 
 ---
 
@@ -337,25 +291,6 @@ GOOGLE_PLACES_API_KEY=AIza_xxxxxxxxxxxxxxxxxxxxxxxx
 git lfs pull
 ```
 
-データを手動で再構築・更新する場合：
-
-```bash
-# WikiVoyage（全都市）
-python -m rag.ingest_wikivoyage
-
-# Reddit（全都市、Pullpush API経由 — APIキー不要）
-python -m rag.ingest_reddit
-
-# Reddit（特定都市だけ追加）
-python -m rag.ingest_reddit --add "都市名1,都市名2"
-
-# Reddit（ローカルファイルからベクトライズのみ、API呼び出しなし）
-python -m rag.ingest_reddit --local
-
-# Google Places（GOOGLE_PLACES_API_KEY が必要）
-python -m rag.ingest_google_places
-```
-
 ### 4. アプリの起動
 
 ```bash
@@ -381,20 +316,10 @@ streamlit run app.py --server.runOnSave true
 
 ---
 
-## ロードマップ
-
-- [ ] Foursquare API 連携（ハイパーローカル tips）
-- [ ] セッションをまたいだユーザー好み記憶機能
-- [ ] 旅行ガイドの PDF エクスポート
-- [ ] 天気・ベストシーズン表示
-- [ ] フライト検索リンク（Skyscanner / Google Flights）
-
----
-
 ## 注意事項
 
 - `data/` は Git LFS で管理されています。クローン後に `git lfs pull` を実行してください。
-- Gemini 3 Flash Preview を JSON モード（`response_mime_type="application/json"`）で使用し、安定した構造化出力を実現しています。
-- Reddit データは Pullpush（コミュニティ運営の Reddit アーカイブ）経由で取得しています。Reddit API キーは不要です。
-- Google Places API は月 $200 の無料クレジットがあり、プロトタイプ用途では十分です。
-- ジオコーディングは Nominatim（無料）を使用し、Google Places API をフォールバックとして併用しています。
+- Gemini 2.5 Flash Lite を JSON モードで使用し、安定した構造化出力を実現しています。
+- Reddit データは Pullpush（コミュニティ運営アーカイブ）経由で取得。API キー不要。
+- Google Places API は月 $200 の無料クレジットあり。
+- 写真は Google Places Photos API から取得し、24時間キャッシュ。

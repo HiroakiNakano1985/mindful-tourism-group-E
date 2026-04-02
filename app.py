@@ -226,24 +226,37 @@ def get_retriever() -> TravelRetriever:
 
 
 @st.cache_data(ttl=86400)
-def get_city_image(city_name: str) -> str:
-    clean = city_name.split(",")[0].strip()
-    params = {
-        "action": "query",
-        "titles": clean,
-        "prop": "pageimages",
-        "format": "json",
-        "pithumbsize": 400,
-    }
-    headers = {"User-Agent": "MindfulTourismApp/1.0 (educational prototype)"}
+def get_city_image(query: str) -> str:
+    """Fetch a photo URL from Google Places API."""
+    google_key = os.getenv("GOOGLE_PLACES_API_KEY", "")
+    if not google_key:
+        return ""
     try:
-        resp = http_requests.get(
-            "https://en.wikipedia.org/w/api.php",
-            params=params, headers=headers, timeout=8,
+        resp = http_requests.post(
+            "https://places.googleapis.com/v1/places:searchText",
+            json={"textQuery": query, "pageSize": 1},
+            headers={
+                "Content-Type": "application/json",
+                "X-Goog-Api-Key": google_key,
+                "X-Goog-FieldMask": "places.photos",
+            },
+            timeout=8,
         )
-        pages = resp.json()["query"]["pages"]
-        page = next(iter(pages.values()))
-        return page.get("thumbnail", {}).get("source", "")
+        places_data = resp.json().get("places", [])
+        if not places_data:
+            return ""
+        photos = places_data[0].get("photos", [])
+        if not photos:
+            return ""
+        photo_name = photos[0].get("name", "")
+        if not photo_name:
+            return ""
+        photo_resp = http_requests.get(
+            f"https://places.googleapis.com/v1/{photo_name}/media",
+            params={"maxWidthPx": 400, "skipHttpRedirect": "true", "key": google_key},
+            timeout=8,
+        )
+        return photo_resp.json().get("photoUri", "")
     except Exception:
         return ""
 
@@ -563,20 +576,8 @@ elif st.session_state.stage == 2:
     _ALL     = [COLLECTION, REDDIT_COLLECTION]
     _HOTELS  = [COLLECTION, GOOGLE_PLACES_COLLECTION]
 
-    # ── Header with city image ────────────────────────────────────────────────
-    img_url = get_city_image(city)
-    if img_url:
-        col_img, col_title = st.columns([1, 2])
-        with col_img:
-            st.image(img_url, use_container_width=True)
-        with col_title:
-            st.markdown(f"## {city}")
-            st.caption(
-                f"{days}-day trip · powered by WikiVoyage + Reddit + Google Places + AI"
-            )
-    else:
-        st.markdown(f"## Your Mindful Guide — {city}")
-        st.caption(f"{days}-day trip · powered by WikiVoyage + Reddit + Google Places + AI")
+    # ── Header with city image + info ────────────────────────────────────────
+    header_container = st.container()
 
     # ── Section jump links ────────────────────────────────────────────────────
     st.markdown(
@@ -699,6 +700,38 @@ elif st.session_state.stage == 2:
     if st.session_state.tips:
         tips = st.session_state.tips
 
+        # ── Render header now that city_info is available ─────────────────────
+        with header_container:
+            img_url = get_city_image(city)
+            col_img, col_title = st.columns([1, 2])
+            with col_img:
+                if img_url:
+                    st.image(img_url, use_container_width=True)
+            with col_title:
+                st.markdown(f"## {city}")
+                st.caption(f"{days}-day trip")
+
+                # Tags from Stage 1
+                s1_tags = st.session_state.selected_tags
+                if s1_tags:
+                    tag_html = " ".join(
+                        f'<span class="city-tag">{t}</span>' for t in s1_tags
+                    )
+                    st.markdown(tag_html, unsafe_allow_html=True)
+
+                # City info
+                city_info = tips.get("city_info", {})
+                if city_info:
+                    st.markdown(
+                        f'<div style="margin-top:10px;font-size:0.85rem;color:#555;line-height:1.8;">'
+                        f'🗣️ {city_info.get("language", "—")} &nbsp;·&nbsp; '
+                        f'💶 {city_info.get("currency", "—")} &nbsp;·&nbsp; '
+                        f'🕐 {city_info.get("timezone", "—")}<br>'
+                        f'🌡️ {city_info.get("climate", "—")}'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
+
         # ── Combined Map (Places + Hotels) ────────────────────────────────────
         places = tips.get("recommended_places", [])
         hotels = tips.get("hotels", [])
@@ -801,11 +834,19 @@ elif st.session_state.stage == 2:
                 for j, place in enumerate(row_places):
                     name = place.get("name", "—")
                     num = place.get("_map_num", "")
-                    label = f"**#{num} {name}**" if num else f"**{name}**"
+                    label = f"#{num} {name}" if num else name
+                    img_url = get_city_image(name)
                     with cols[j]:
                         with st.container(border=True):
-                            st.markdown(label)
-                            st.write(place.get("description", ""))
+                            # Place image
+                            if img_url:
+                                st.markdown(
+                                    f'<img src="{img_url}" style="width:100%;height:140px;'
+                                    f'object-fit:cover;border-radius:8px;">',
+                                    unsafe_allow_html=True,
+                                )
+                            st.markdown(f"**{label}**")
+                            st.caption(place.get("description", ""))
                             mindful = place.get("mindful_moment", "")
                             if mindful:
                                 st.markdown(
@@ -836,14 +877,22 @@ elif st.session_state.stage == 2:
                         category.lower(), "⚪"
                     )
                     letter = hotel.get("_map_letter", "")
-                    hotel_label = f"{badge} **{letter}. {hotel_name}**" if letter else f"{badge} **{hotel_name}**"
+                    hotel_label = f"{letter}. {hotel_name}" if letter else hotel_name
+                    # Star rating from category
+                    stars = {"budget": "★★★☆☆", "mid-range": "★★★★☆", "luxury": "★★★★★"}.get(
+                        category.lower(), "★★★☆☆"
+                    )
                     with cols[j]:
                         with st.container(border=True):
-                            st.markdown(hotel_label)
-                            st.caption(f"{category}")
+                            st.markdown(f"{badge} **{hotel_label}**")
+                            st.markdown(
+                                f'<span style="color:#f59e0b;font-size:1.1rem;">{stars}</span>'
+                                f' <span style="color:#666;font-size:0.8rem;">{category}</span>',
+                                unsafe_allow_html=True,
+                            )
                             note = hotel.get("note", "")
                             if note:
-                                st.write(note)
+                                st.caption(note)
                             st.link_button(
                                 "🔗 Booking.com",
                                 _booking_url(hotel_name, city),
@@ -861,14 +910,16 @@ elif st.session_state.stage == 2:
         if not etiquette:
             st.info("No etiquette tips returned.")
         else:
-            col_e1, col_e2 = st.columns(2, gap="medium")
-            half = (len(etiquette) + 1) // 2
-            with col_e1:
-                for item in etiquette[:half]:
-                    st.markdown(f"✓ &nbsp;{item}")
-            with col_e2:
-                for item in etiquette[half:]:
-                    st.markdown(f"✓ &nbsp;{item}")
+            _etiq_icons = ["⚠️", "🍽️", "💰", "🚕", "🗣️", "👀", "🎭", "🚶"]
+            for i, item in enumerate(etiquette):
+                icon = _etiq_icons[i % len(_etiq_icons)]
+                st.markdown(
+                    f'<div style="background:#fff8f0;border-left:3px solid #f59e0b;'
+                    f'padding:10px 14px;border-radius:4px;margin:6px 0;'
+                    f'font-size:0.9rem;">'
+                    f'{icon} &nbsp;{item}</div>',
+                    unsafe_allow_html=True,
+                )
 
         st.divider()
 
@@ -878,17 +929,59 @@ elif st.session_state.stage == 2:
             unsafe_allow_html=True,
         )
         pacing = tips.get("pacing_advice", "")
-        if isinstance(pacing, list):
-            col_p1, col_p2 = st.columns(2, gap="medium")
-            half = (len(pacing) + 1) // 2
-            with col_p1:
-                for item in pacing[:half]:
-                    with st.container(border=True):
-                        st.markdown(f"💡 &nbsp;{item}")
-            with col_p2:
-                for item in pacing[half:]:
-                    with st.container(border=True):
-                        st.markdown(f"💡 &nbsp;{item}")
+        _pace_config = {
+            "timing":         ("⏰", "Timing",         "#eff6ff", "#3b82f6"),
+            "connection":     ("🤝", "Local Connection","#fef3c7", "#d97706"),
+            "movement":       ("🚶", "Movement",       "#ecfdf5", "#10b981"),
+            "doing_nothing":  ("☕", "Doing Nothing",   "#fdf4ff", "#a855f7"),
+            "local_scale":    ("📍", "Local Scale",     "#fff1f2", "#f43f5e"),
+            "sustainability": ("🌱", "Sustainability",  "#ecfdf5", "#059669"),
+        }
+        _category_order = ["timing", "connection", "movement", "doing_nothing", "local_scale", "sustainability"]
+
+        if isinstance(pacing, list) and pacing:
+            # Handle both old format (strings) and new format (objects with category)
+            if isinstance(pacing[0], dict):
+                # Sort by category order
+                sorted_pacing = sorted(
+                    pacing,
+                    key=lambda x: (
+                        _category_order.index(x.get("category", "timing"))
+                        if x.get("category", "timing") in _category_order
+                        else 99
+                    ),
+                )
+                current_cat = None
+                for item in sorted_pacing:
+                    cat = item.get("category", "timing")
+                    tip = item.get("tip", "")
+                    icon, cat_label, bg, border = _pace_config.get(
+                        cat, ("💡", cat, "#f5f5f5", "#9e9e9e")
+                    )
+                    # Show category header when it changes
+                    if cat != current_cat:
+                        st.markdown(
+                            f'<div style="font-size:0.75rem;font-weight:700;color:{border};'
+                            f'text-transform:uppercase;letter-spacing:1px;margin-top:12px;">'
+                            f'{icon} {cat_label}</div>',
+                            unsafe_allow_html=True,
+                        )
+                        current_cat = cat
+                    st.markdown(
+                        f'<div style="background:{bg};border-left:3px solid {border};'
+                        f'padding:10px 14px;border-radius:4px;margin:4px 0;'
+                        f'font-size:0.9rem;">{tip}</div>',
+                        unsafe_allow_html=True,
+                    )
+            else:
+                # Fallback for old string format
+                for item in pacing:
+                    st.markdown(
+                        f'<div style="background:#f5f5f5;border-left:3px solid #9e9e9e;'
+                        f'padding:10px 14px;border-radius:4px;margin:6px 0;'
+                        f'font-size:0.9rem;">💡 &nbsp;{item}</div>',
+                        unsafe_allow_html=True,
+                    )
         elif pacing:
             st.write(pacing)
         else:

@@ -109,8 +109,10 @@ def _generate(system: str, user: str, max_tokens: int = 2000, temperature: float
 # ── Shared system instruction fragments ───────────────────────────────────────
 
 _SYSTEM_BASE = (
-    "You are a mindful travel advisor who writes like a witty friend, not a guidebook. "
-    "Add humor — sarcasm, self-deprecation, funny warnings are encouraged. "
+    "You are a mindful travel advisor who writes like an enthusiastic friend "
+    "who genuinely loves this city. Be warm, positive, and specific. "
+    "Light humor is welcome but never sarcastic or negative. "
+    "Focus on what makes each place WONDERFUL, not what's wrong with it. "
     "You ALWAYS respond with valid JSON only — no prose, no markdown."
 )
 
@@ -182,6 +184,27 @@ def recommend_cities(
 
 # ── Stage 2: four parallel LLM calls ─────────────────────────────────────────
 
+def _generate_city_info(city: str) -> dict:
+    """Generate basic city info (language, currency, timezone, climate)."""
+    user_msg = (
+        f"City: {city}\n\n"
+        "Return basic travel info for this city as a JSON object:\n"
+        '{"language": "main language", "currency": "currency with symbol", '
+        '"timezone": "GMT offset", "climate": "one-line climate summary for travellers"}'
+    )
+    raw = _generate(
+        "You are a factual travel reference. Respond with valid JSON only.",
+        user_msg, max_tokens=300, temperature=0.2,
+    )
+    try:
+        parsed = json.loads(raw)
+        if isinstance(parsed, dict):
+            return parsed
+    except json.JSONDecodeError:
+        pass
+    return {}
+
+
 def _generate_places(
     city: str, days: int, context: str, user_request: str,
     tags: list[str] | None = None,
@@ -222,7 +245,11 @@ def _generate_hotels(city: str, hotel_context: str) -> list:
         "The reviews above contain lines like '[Google Review of HOTEL NAME, rating:X/5]'.\n"
         "Extract 3-5 distinct hotels from these review headers.\n"
         "For each hotel, determine the category (budget/mid-range/luxury) from review content,\n"
-        "and write a one-line witty highlight based on what reviewers said.\n\n"
+        "and write a one-line highlight — a specific detail from the reviews, "
+        "like something a friend would tell you. "
+        "GOOD: 'Breakfast buffet is incredible', 'River-view rooms on 6F are romantic', "
+        "'The spa has a hidden rooftop jacuzzi' "
+        "BAD: 'Guests loved the service', 'Visitors praised the location', 'Highly recommended'\n\n"
         "Return ONLY a JSON array:\n"
         '[{"name": "Hotel Name", "category": "budget/mid-range/luxury", "note": "one-line highlight from reviews"}]'
     )
@@ -238,11 +265,13 @@ def _generate_etiquette(city: str, etiquette_context: str) -> list:
         f"Give 5 etiquette tips SPECIFIC to {city}. Each tip must mention a "
         "specific place, street, neighborhood, or custom unique to this city.\n"
         + _SPECIFICITY_RULE.format(city=city) + "\n"
+        "Frame tips as HELPFUL insider knowledge, not warnings or complaints. "
+        "Focus on 'here's how to have a better experience' not 'watch out for this'.\n"
         "Examples of GOOD tips:\n"
-        f'  - "In {city}, restaurants add a coperto of €2-3 — normal, not a scam"\n'
-        f'  - "The waiters at Place X in {city} will ignore you if you wave — make eye contact"\n'
+        f'  - "In {city}, the coperto (€2-3 cover charge) includes bread and water — it is a nice tradition"\n'
+        f'  - "Make eye contact with waiters in {city} — they appreciate the personal touch over waving"\n'
         "Examples of BAD tips (NEVER write):\n"
-        '  - "Be aware of pickpockets" / "Respect local customs"\n\n'
+        '  - "Be aware of pickpockets" / "Watch out for scams" / "Avoid tourist traps"\n\n'
         "Return ONLY a JSON array of 5 strings:\n"
         '["tip 1", "tip 2", "tip 3", "tip 4", "tip 5"]'
     )
@@ -269,8 +298,9 @@ def _generate_pacing(city: str, days: int, pacing_context: str) -> list:
         "(e.g. 'tap water is drinkable', 'tram X has the same view as the €40 boat tour')\n\n"
         "Examples of BAD tips (NEVER write):\n"
         '  - "Book in advance" / "Use public transport" / "Find a quiet bench"\n\n'
-        "Return ONLY a JSON array of exactly 8 strings:\n"
-        '["tip 1", "tip 2", ...]'
+        "Return ONLY a JSON array of exactly 8 objects with category and tip:\n"
+        '[{"category": "timing", "tip": "..."}, {"category": "connection", "tip": "..."}, ...]\n'
+        "Valid categories: timing, connection, movement, doing_nothing, local_scale, sustainability"
     )
     raw = _generate(_SYSTEM_BASE, user_msg, max_tokens=8000)
     return _parse_list_response(raw, "pacing")
@@ -292,8 +322,9 @@ def generate_mindful_tips(
     """
     results = {}
 
-    with ThreadPoolExecutor(max_workers=4) as executor:
+    with ThreadPoolExecutor(max_workers=5) as executor:
         futures = {
+            executor.submit(_generate_city_info, city): "city_info",
             executor.submit(
                 _generate_places, city, days, context, user_request, tags,
             ): "recommended_places",
