@@ -13,9 +13,14 @@ import urllib.parse
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import time
+
+import folium
 import requests as http_requests
 import streamlit as st
 import streamlit.components.v1 as components
+from geopy.geocoders import Nominatim
+from streamlit_folium import st_folium
 
 from llm.client import generate_mindful_tips, recommend_cities
 from rag.cities import (
@@ -51,7 +56,6 @@ st.markdown(
     section[data-testid="stSidebar"] .stTextArea label {
         color: #b7e4c7 !important;
     }
-    /* Input fields in sidebar */
     section[data-testid="stSidebar"] textarea {
         background: #1b4332 !important;
         color: #e8f5e9 !important;
@@ -63,7 +67,6 @@ st.markdown(
         color: #74c69d !important;
         opacity: 0.7 !important;
     }
-    /* Find Destinations button */
     section[data-testid="stSidebar"] .stFormSubmitButton button {
         background: #f77f00 !important;
         color: #fff !important;
@@ -75,7 +78,6 @@ st.markdown(
     section[data-testid="stSidebar"] .stFormSubmitButton button:hover {
         background: #e36c00 !important;
     }
-    /* Other buttons in sidebar */
     section[data-testid="stSidebar"] .stButton button {
         background: #52b788 !important;
         color: #fff !important;
@@ -87,13 +89,16 @@ st.markdown(
         background: #40916c !important;
     }
 
-    /* ── City cards ─────────────────────────────────── */
-    .city-card img {
-        border-radius: 10px 10px 0 0;
-        width: 100%;
-        height: 180px;
-        object-fit: cover;
+    /* ── City cards hover ───────────────────────────── */
+    div[data-testid="stVerticalBlock"] > div[data-testid="stVerticalBlockBorderWrapper"] {
+        transition: transform 0.2s ease, box-shadow 0.2s ease;
     }
+    div[data-testid="stVerticalBlock"] > div[data-testid="stVerticalBlockBorderWrapper"]:hover {
+        transform: translateY(-4px);
+        box-shadow: 0 8px 24px rgba(0,0,0,0.12);
+    }
+
+    /* ── City card content ──────────────────────────── */
     .city-card-title {
         font-size: 1.15rem;
         font-weight: 700;
@@ -115,23 +120,69 @@ st.markdown(
         border-bottom: 2px solid #52b788;
     }
 
-    /* ── Hotel badge ────────────────────────────────── */
-    .hotel-card {
-        padding: 4px 0;
+    /* ── Section jump links ─────────────────────────── */
+    .section-nav {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin-bottom: 1rem;
+    }
+    .section-nav a {
+        display: inline-block;
+        padding: 6px 16px;
+        border-radius: 20px;
+        background: #f0f2f6;
+        color: #1b4332 !important;
+        text-decoration: none !important;
+        font-size: 0.85rem;
+        font-weight: 600;
+        transition: background 0.2s;
+    }
+    .section-nav a:hover {
+        background: #d8f3dc;
     }
 
-    /* ── Data source tags ───────────────────────────── */
-    .source-tag {
-        display: inline-block;
-        padding: 2px 10px;
-        border-radius: 12px;
-        font-size: 0.7rem;
-        font-weight: 600;
-        margin: 2px;
+    /* ── Sample prompt buttons ──────────────────────── */
+    .prompt-grid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 12px;
+        margin-top: 1.5rem;
     }
-    .tag-wiki   { background: #d8f3dc; color: #1b4332 !important; }
-    .tag-reddit { background: #ffe0cc; color: #bf360c !important; }
-    .tag-google { background: #dbeafe; color: #1e40af !important; }
+    .prompt-card {
+        background: #f8f9fa;
+        border: 1px solid #e9ecef;
+        border-radius: 12px;
+        padding: 16px;
+        text-align: center;
+        cursor: pointer;
+        transition: all 0.2s;
+    }
+    .prompt-card:hover {
+        background: #d8f3dc;
+        border-color: #52b788;
+        transform: translateY(-2px);
+    }
+    .prompt-card .emoji {
+        font-size: 2rem;
+        margin-bottom: 6px;
+    }
+    .prompt-card .label {
+        font-weight: 600;
+        font-size: 0.9rem;
+        color: #1b4332;
+    }
+
+    /* ── Loading steps ──────────────────────────────── */
+    .loading-step {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 6px 0;
+        font-size: 0.9rem;
+    }
+    .loading-step .done { color: #2e7d32; }
+    .loading-step .pending { color: #9e9e9e; }
     </style>
     """,
     unsafe_allow_html=True,
@@ -155,10 +206,6 @@ def get_retriever() -> TravelRetriever:
 
 @st.cache_data(ttl=86400)
 def get_city_image(city_name: str) -> str:
-    """
-    Fetch a thumbnail image URL for *city_name* from the Wikipedia API.
-    Returns a placeholder if none is found.
-    """
     clean = city_name.split(",")[0].strip()
     params = {
         "action": "query",
@@ -167,9 +214,7 @@ def get_city_image(city_name: str) -> str:
         "format": "json",
         "pithumbsize": 400,
     }
-    headers = {
-        "User-Agent": "MindfulTourismApp/1.0 (educational prototype)"
-    }
+    headers = {"User-Agent": "MindfulTourismApp/1.0 (educational prototype)"}
     try:
         resp = http_requests.get(
             "https://en.wikipedia.org/w/api.php",
@@ -181,6 +226,16 @@ def get_city_image(city_name: str) -> str:
     except Exception:
         return ""
 
+# ── Sample prompts ────────────────────────────────────────────────────────────
+
+SAMPLE_PROMPTS = [
+    ("🏖️", "Beach & Relax",    "I want a slow quiet trip with beautiful beaches and clear water, from Barcelona"),
+    ("🍕", "Street Food",       "I want to eat authentic local street food in hidden spots that only locals know about, from Barcelona"),
+    ("🏛️", "History & Ruins",   "I want to visit off-the-beaten-path historical ruins and forgotten places, from Barcelona"),
+    ("🌿", "Slow & Quiet",      "I want a slow quiet trip with no tourists, beautiful nature and local wine, from Barcelona"),
+    ("🎵", "Nightlife",         "I want to explore underground music and nightlife scenes, from Barcelona"),
+    ("👨‍👩‍👧", "Family Trip",       "Family trip with kids under 10, need safe beaches and fun activities, from Barcelona"),
+]
 
 # ── Session state defaults ────────────────────────────────────────────────────
 
@@ -202,9 +257,100 @@ _init_state()
 
 # ── Utility helpers ───────────────────────────────────────────────────────────
 
-def _maps_embed_url(query: str) -> str:
-    encoded = urllib.parse.quote_plus(query)
-    return f"https://maps.google.com/maps?q={encoded}&output=embed&hl=en"
+@st.cache_data(ttl=86400)
+def _geocode(place: str, city: str) -> tuple[float, float] | None:
+    """
+    Geocode a place name to (lat, lon).
+    Tries Nominatim first (free), falls back to Google Places Text Search.
+    """
+    # Try Nominatim
+    try:
+        geolocator = Nominatim(user_agent="MindfulTourismApp/1.0")
+        location = geolocator.geocode(f"{place}, {city}", timeout=5)
+        if location:
+            return (location.latitude, location.longitude)
+    except Exception:
+        pass
+
+    # Fallback: Google Places Text Search
+    google_key = os.getenv("GOOGLE_PLACES_API_KEY", "")
+    if google_key:
+        try:
+            resp = http_requests.post(
+                "https://places.googleapis.com/v1/places:searchText",
+                json={"textQuery": f"{place}, {city}", "pageSize": 1},
+                headers={
+                    "Content-Type": "application/json",
+                    "X-Goog-Api-Key": google_key,
+                    "X-Goog-FieldMask": "places.location",
+                },
+                timeout=5,
+            )
+            places_data = resp.json().get("places", [])
+            if places_data:
+                loc = places_data[0].get("location", {})
+                lat = loc.get("latitude")
+                lng = loc.get("longitude")
+                if lat and lng:
+                    return (lat, lng)
+        except Exception:
+            pass
+
+    return None
+
+
+def _build_map(
+    items: list[dict],
+    city: str,
+    name_key: str = "name",
+    color_fn=None,
+    icon_prefix: str = "info-sign",
+) -> folium.Map | None:
+    """
+    Build a Folium map with markers for all items.
+    color_fn: optional function(item) -> color string for the marker.
+    Returns None if no items could be geocoded.
+    """
+    # First geocode the city itself for centering
+    city_coords = _geocode(city.split(",")[0].strip(), "")
+    if not city_coords:
+        city_coords = (41.0, 2.0)  # fallback: Barcelona area
+
+    m = folium.Map(location=city_coords, zoom_start=13, tiles="CartoDB positron")
+
+    placed = 0
+    for item in items:
+        name = item.get(name_key, "")
+        if not name:
+            continue
+        coords = _geocode(name, city)
+        time.sleep(0.3)  # Nominatim rate limit: ~1 req/sec
+        if not coords:
+            continue
+
+        color = color_fn(item) if color_fn else "blue"
+        popup_text = name
+        if "description" in item:
+            popup_text += f"<br><small>{item['description'][:80]}...</small>"
+        elif "note" in item:
+            popup_text += f"<br><small>{item['note'][:80]}</small>"
+
+        folium.Marker(
+            location=coords,
+            popup=folium.Popup(popup_text, max_width=250),
+            tooltip=name,
+            icon=folium.Icon(color=color, icon=icon_prefix, prefix="glyphicon"),
+        ).add_to(m)
+        placed += 1
+
+    return m if placed > 0 else None
+
+
+def _hotel_color(hotel: dict) -> str:
+    """Return marker color based on hotel category."""
+    cat = hotel.get("category", "").lower()
+    return {"budget": "green", "mid-range": "orange", "luxury": "red"}.get(cat, "blue")
+
 
 def _booking_url(hotel_name: str, city: str) -> str:
     encoded = urllib.parse.quote_plus(f"{hotel_name} {city}")
@@ -223,6 +369,9 @@ def _select_city(city_name: str):
     st.session_state.error         = None
     st.session_state.stage         = 2
 
+def _use_sample_prompt(prompt_text: str):
+    st.session_state.user_request = prompt_text
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # SIDEBAR — Always visible
@@ -233,7 +382,6 @@ with st.sidebar:
     st.caption("Travel slow. Travel well.")
     st.divider()
 
-    # ── Input form ────────────────────────────────────────────────────────────
     st.markdown("**Plan your trip**")
     with st.form("travel_form"):
         user_request = st.text_area(
@@ -275,7 +423,6 @@ with st.sidebar:
                 except Exception as exc:
                     st.session_state.error = str(exc)
 
-    # ── Selected city indicator ───────────────────────────────────────────────
     if st.session_state.selected_city:
         st.divider()
         st.markdown("**Selected destination**")
@@ -285,7 +432,6 @@ with st.sidebar:
             _reset_to_stage1()
             st.rerun()
 
-    # ── Data sources ──────────────────────────────────────────────────────────
     st.divider()
     st.markdown("**Data sources**")
     st.markdown("· WikiVoyage · Reddit · Google Places")
@@ -295,7 +441,6 @@ with st.sidebar:
 # MAIN AREA
 # ══════════════════════════════════════════════════════════════════════════════
 
-# ── Error banner ──────────────────────────────────────────────────────────────
 if st.session_state.error:
     st.error(st.session_state.error)
     if st.session_state.stage == 2:
@@ -310,13 +455,26 @@ if st.session_state.error:
 if st.session_state.stage == 1:
 
     if not st.session_state.cities:
-        # Landing state
+        # ── Landing page with sample prompts ──────────────────────────────────
         st.markdown("# 🌍 Discover your next destination")
         st.markdown(
-            "Describe your ideal trip in the sidebar and we'll suggest "
-            "destinations tailored to your interests."
+            "Describe your ideal trip in the sidebar, or try one of these ideas:"
         )
+
+        # Sample prompt buttons (2 rows of 3)
+        cols = st.columns(3, gap="medium")
+        for i, (emoji, label, prompt) in enumerate(SAMPLE_PROMPTS):
+            with cols[i % 3]:
+                if st.button(
+                    f"{emoji} {label}",
+                    key=f"sample_{i}",
+                    use_container_width=True,
+                ):
+                    _use_sample_prompt(prompt)
+                    st.rerun()
+
     else:
+        # ── City cards ────────────────────────────────────────────────────────
         st.markdown("## Choose your destination")
         st.caption("Click **Select** to get your personalised Mindful Guide.")
 
@@ -327,7 +485,6 @@ if st.session_state.stage == 1:
 
             with cols[i]:
                 with st.container(border=True):
-                    # City image
                     if img_url:
                         st.markdown(
                             f'<img src="{img_url}" style="border-radius:10px 10px 0 0;'
@@ -366,7 +523,6 @@ elif st.session_state.stage == 2:
     city = st.session_state.selected_city
     days = st.session_state.days
 
-    # Collection shorthands for section-specific retrieval
     _ALL     = [COLLECTION, REDDIT_COLLECTION]
     _HOTELS  = [COLLECTION, GOOGLE_PLACES_COLLECTION]
 
@@ -385,83 +541,219 @@ elif st.session_state.stage == 2:
         st.markdown(f"## Your Mindful Guide — {city}")
         st.caption(f"{days}-day trip · powered by WikiVoyage + Reddit + Google Places + AI")
 
-    # ── Generate tips (cached in session_state) ───────────────────────────────
+    # ── Section jump links ────────────────────────────────────────────────────
+    st.markdown(
+        '<div class="section-nav">'
+        '<a href="#your-mindful-map">🗺️ Map</a>'
+        '<a href="#recommended-places">📍 Places</a>'
+        '<a href="#where-to-stay">🏨 Hotels</a>'
+        '<a href="#local-etiquette">🙏 Etiquette</a>'
+        '<a href="#mindful-pacing">🌿 Pacing</a>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+    # ── Generate tips with step-by-step progress ──────────────────────────────
     if st.session_state.tips is None and st.session_state.error is None:
-        with st.spinner(f"Retrieving local knowledge for {city} …"):
-            retriever = get_retriever()
+        progress_container = st.empty()
+        retriever = get_retriever()
 
-            try:
-                travel_context = retriever.retrieve(
-                    city=city,
-                    query=(
-                        f"top attractions things to do hidden gems "
-                        f"local tips food {city}"
-                    ),
-                    collections=_ALL,
-                )
-            except Exception as exc:
-                travel_context = ""
-                st.warning(f"RAG retrieval issue: {exc}")
+        # Step 1: Travel context
+        progress_container.markdown(
+            '<div class="loading-step"><span class="pending">⏳</span> '
+            'Searching local knowledge (places & food)...</div>',
+            unsafe_allow_html=True,
+        )
+        try:
+            travel_context = retriever.retrieve(
+                city=city,
+                query=f"top attractions things to do hidden gems local tips food {city}",
+                collections=_ALL,
+            )
+        except Exception as exc:
+            travel_context = ""
 
-            try:
-                hotel_context = retriever.retrieve(
-                    city=city,
-                    query=f"sleep accommodation hotel budget luxury hostel stay {city}",
-                    collections=_HOTELS,
-                )
-            except Exception as exc:
-                hotel_context = ""
+        # Step 2: Hotel context
+        progress_container.markdown(
+            '<div class="loading-step"><span class="done">✅</span> Local knowledge</div>'
+            '<div class="loading-step"><span class="pending">⏳</span> '
+            'Searching hotel reviews...</div>',
+            unsafe_allow_html=True,
+        )
+        try:
+            hotel_context = retriever.retrieve(
+                city=city,
+                query=f"sleep accommodation hotel budget luxury hostel stay {city}",
+                collections=_HOTELS,
+            )
+        except Exception as exc:
+            hotel_context = ""
 
-            try:
-                etiquette_context = retriever.retrieve(
-                    city=city,
-                    query=f"mistakes tourists make scams avoid tips warning rude {city}",
-                    collections=_ALL,
-                )
-            except Exception as exc:
-                etiquette_context = ""
+        # Step 3: Etiquette context
+        progress_container.markdown(
+            '<div class="loading-step"><span class="done">✅</span> Local knowledge</div>'
+            '<div class="loading-step"><span class="done">✅</span> Hotel reviews</div>'
+            '<div class="loading-step"><span class="pending">⏳</span> '
+            'Searching insider tips & warnings...</div>',
+            unsafe_allow_html=True,
+        )
+        try:
+            etiquette_context = retriever.retrieve(
+                city=city,
+                query=f"mistakes tourists make scams avoid tips warning rude {city}",
+                collections=_ALL,
+            )
+        except Exception as exc:
+            etiquette_context = ""
 
-            try:
-                pacing_context = retriever.retrieve(
-                    city=city,
-                    query=(
-                        f"best time to visit early morning quiet spot locals only "
-                        f"hidden park bench relax do nothing sit and watch "
-                        f"slow walk scenic route bus vs walk "
-                        f"closed sunday market schedule last train "
-                        f"lunch time dinner time local pace {city}"
-                    ),
-                    collections=_ALL,
-                )
-            except Exception as exc:
-                pacing_context = ""
+        # Step 4: Pacing context
+        progress_container.markdown(
+            '<div class="loading-step"><span class="done">✅</span> Local knowledge</div>'
+            '<div class="loading-step"><span class="done">✅</span> Hotel reviews</div>'
+            '<div class="loading-step"><span class="done">✅</span> Insider tips</div>'
+            '<div class="loading-step"><span class="pending">⏳</span> '
+            'Searching pacing & timing info...</div>',
+            unsafe_allow_html=True,
+        )
+        try:
+            pacing_context = retriever.retrieve(
+                city=city,
+                query=(
+                    f"best time to visit early morning quiet spot locals only "
+                    f"hidden park bench relax do nothing sit and watch "
+                    f"slow walk scenic route bus vs walk "
+                    f"closed sunday market schedule last train "
+                    f"lunch time dinner time local pace {city}"
+                ),
+                collections=_ALL,
+            )
+        except Exception as exc:
+            pacing_context = ""
 
-        with st.spinner("Crafting your personalised guide …"):
-            try:
-                tips = generate_mindful_tips(
-                    city, days, travel_context,
-                    user_request=st.session_state.user_request,
-                    hotel_context=hotel_context,
-                    etiquette_context=etiquette_context,
-                    pacing_context=pacing_context,
-                )
-                if not tips:
-                    st.session_state.error = "The AI returned an empty guide. Please try again."
-                else:
-                    st.session_state.tips = tips
-            except Exception as exc:
-                st.session_state.error = str(exc)
+        # Step 5: LLM generation
+        progress_container.markdown(
+            '<div class="loading-step"><span class="done">✅</span> Local knowledge</div>'
+            '<div class="loading-step"><span class="done">✅</span> Hotel reviews</div>'
+            '<div class="loading-step"><span class="done">✅</span> Insider tips</div>'
+            '<div class="loading-step"><span class="done">✅</span> Pacing info</div>'
+            '<div class="loading-step"><span class="pending">⏳</span> '
+            'Crafting your personalised guide...</div>',
+            unsafe_allow_html=True,
+        )
+        try:
+            tips = generate_mindful_tips(
+                city, days, travel_context,
+                user_request=st.session_state.user_request,
+                hotel_context=hotel_context,
+                etiquette_context=etiquette_context,
+                pacing_context=pacing_context,
+            )
+            if not tips:
+                st.session_state.error = "The AI returned an empty guide. Please try again."
+            else:
+                st.session_state.tips = tips
+        except Exception as exc:
+            st.session_state.error = str(exc)
+
+        progress_container.empty()
 
     # ── Tips display ──────────────────────────────────────────────────────────
     if st.session_state.tips:
         tips = st.session_state.tips
 
-        # ── Recommended Places (2 columns) ────────────────────────────────────
+        # ── Combined Map (Places + Hotels) ────────────────────────────────────
+        places = tips.get("recommended_places", [])
+        hotels = tips.get("hotels", [])
+
+        # Build one map with both places and hotels
+        city_clean = city.split(",")[0].strip()
+        city_coords = _geocode(city_clean, "")
+        if not city_coords:
+            city_coords = (41.0, 2.0)
+
+        combined_map = folium.Map(
+            location=city_coords, zoom_start=13, tiles="CartoDB positron"
+        )
+        marker_count = 0
+
+        # Add places (numbered markers)
+        place_num = 0
+        for item in places:
+            name = item.get("name", "")
+            if not name:
+                continue
+            coords = _geocode(name, city)
+            time.sleep(0.3)
+            if not coords:
+                continue
+            place_num += 1
+            desc = item.get("description", "")[:80]
+            folium.Marker(
+                location=coords,
+                popup=folium.Popup(f"<b>#{place_num} {name}</b><br><small>{desc}...</small>", max_width=250),
+                tooltip=f"#{place_num} {name}",
+                icon=folium.DivIcon(
+                    html=f'<div style="background:#2563eb;color:#fff;border-radius:50%;'
+                         f'width:28px;height:28px;display:flex;align-items:center;'
+                         f'justify-content:center;font-weight:700;font-size:14px;'
+                         f'border:2px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,0.3);">'
+                         f'{place_num}</div>',
+                    icon_size=(28, 28),
+                    icon_anchor=(14, 14),
+                ),
+            ).add_to(combined_map)
+            marker_count += 1
+            item["_map_num"] = place_num  # store for card display
+
+        # Add hotels (lettered markers)
+        hotel_letters = "ABCDEFGHIJ"
+        hotel_idx = 0
+        for item in hotels:
+            name = item.get("name", "")
+            if not name:
+                continue
+            coords = _geocode(name, city)
+            time.sleep(0.3)
+            if not coords:
+                continue
+            letter = hotel_letters[hotel_idx % len(hotel_letters)]
+            hotel_idx += 1
+            note = item.get("note", "")[:80]
+            cat = item.get("category", "")
+            color_hex = {"budget": "#16a34a", "mid-range": "#ea580c", "luxury": "#dc2626"}.get(
+                cat.lower(), "#6b7280"
+            )
+            folium.Marker(
+                location=coords,
+                popup=folium.Popup(f"<b>🏨{letter} {name}</b><br><small>{cat} — {note}</small>", max_width=250),
+                tooltip=f"🏨{letter} {name}",
+                icon=folium.DivIcon(
+                    html=f'<div style="background:{color_hex};color:#fff;border-radius:50%;'
+                         f'width:28px;height:28px;display:flex;align-items:center;'
+                         f'justify-content:center;font-weight:700;font-size:14px;'
+                         f'border:2px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,0.3);">'
+                         f'{letter}</div>',
+                    icon_size=(28, 28),
+                    icon_anchor=(14, 14),
+                ),
+            ).add_to(combined_map)
+            marker_count += 1
+            item["_map_letter"] = letter  # store for card display
+
+        if marker_count > 0:
+            st.markdown(
+                '<div class="section-header">🗺️ Your Mindful Map</div>',
+                unsafe_allow_html=True,
+            )
+            st.caption("🔵 1,2,3... = recommended places &nbsp;·&nbsp; 🟢A,B = budget hotel · 🟠A,B = mid-range · 🔴A,B = luxury")
+            st_folium(combined_map, use_container_width=True, height=450, returned_objects=[])
+            st.divider()
+
+        # ── Recommended Places ────────────────────────────────────────────────
         st.markdown(
-            '<div class="section-header">📍 Recommended Places</div>',
+            '<div class="section-header" id="recommended-places">📍 Recommended Places</div>',
             unsafe_allow_html=True,
         )
-        places = tips.get("recommended_places", [])
         if not places:
             st.info("No place recommendations returned by the AI.")
         else:
@@ -470,26 +762,20 @@ elif st.session_state.stage == 2:
                 cols = st.columns(2, gap="medium")
                 for j, place in enumerate(row_places):
                     name = place.get("name", "—")
+                    num = place.get("_map_num", "")
+                    label = f"**#{num} {name}**" if num else f"**{name}**"
                     with cols[j]:
                         with st.container(border=True):
-                            st.markdown(f"**{name}**")
+                            st.markdown(label)
                             st.write(place.get("description", ""))
-                            with st.expander("🗺️ View on Map"):
-                                components.html(
-                                    f'<iframe src="{_maps_embed_url(f"{name}, {city}")}" '
-                                    f'width="100%" height="250" style="border:0;border-radius:8px;" '
-                                    f'allowfullscreen loading="lazy"></iframe>',
-                                    height=260,
-                                )
 
         st.divider()
 
-        # ── Hotels (2 columns) ────────────────────────────────────────────────
+        # ── Hotels ────────────────────────────────────────────────────────────
         st.markdown(
-            '<div class="section-header">🏨 Where to Stay</div>',
+            '<div class="section-header" id="where-to-stay">🏨 Where to Stay</div>',
             unsafe_allow_html=True,
         )
-        hotels = tips.get("hotels", [])
         if not hotels:
             st.info("No hotel data found for this city.")
         else:
@@ -502,9 +788,11 @@ elif st.session_state.stage == 2:
                     badge      = {"budget": "🟢", "mid-range": "🟡", "luxury": "🔴"}.get(
                         category.lower(), "⚪"
                     )
+                    letter = hotel.get("_map_letter", "")
+                    hotel_label = f"{badge} **{letter}. {hotel_name}**" if letter else f"{badge} **{hotel_name}**"
                     with cols[j]:
                         with st.container(border=True):
-                            st.markdown(f"{badge} **{hotel_name}**")
+                            st.markdown(hotel_label)
                             st.caption(f"{category}")
                             note = hotel.get("note", "")
                             if note:
@@ -517,9 +805,9 @@ elif st.session_state.stage == 2:
 
         st.divider()
 
-        # ── Etiquette ──────────────────────────────────────────────────────
+        # ── Etiquette ─────────────────────────────────────────────────────────
         st.markdown(
-            '<div class="section-header">🙏 Local Etiquette</div>',
+            '<div class="section-header" id="local-etiquette">🙏 Local Etiquette</div>',
             unsafe_allow_html=True,
         )
         etiquette = tips.get("etiquette", [])
@@ -537,9 +825,9 @@ elif st.session_state.stage == 2:
 
         st.divider()
 
-        # ── Mindful Pacing (full width) ───────────────────────────────────
+        # ── Mindful Pacing ────────────────────────────────────────────────────
         st.markdown(
-            '<div class="section-header">🌿 Mindful Pacing</div>',
+            '<div class="section-header" id="mindful-pacing">🌿 Mindful Pacing</div>',
             unsafe_allow_html=True,
         )
         pacing = tips.get("pacing_advice", "")
